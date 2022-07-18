@@ -11,11 +11,11 @@ $0: (Re-)deploy egress proxies for a set of apps
 
 Usage:
    $0 -h
-   $0 app[,app2,app3...] [egressspace [egressorg] ] 
+   $0 app[,app2,app3...] [ egressspace [egressorg] ]
 
 Options:
 -h:            show help and exit
-appnames:      comma-separated list of apps that should have egress-proxies 
+appnames:      comma-separated list of apps that should have egress-proxies
 egressspace:   space with public egress (default: <currentspace>-egress)
 egressorg:     org where the public egress space is (default: <currentorg>)
 
@@ -45,7 +45,7 @@ startorg=$(   cf target | grep org   | tr -s ' ' | cut -d ' ' -f 2 )
 startspace=$( cf target | grep space | tr -s ' ' | cut -d ' ' -f 2 )
 
 if [ -z "${appnames}" ]; then
-    echo "ERROR: You must supply at least appnames."
+    echo "ERROR: You must supply at least 1 app name."
     echo "${usage}"
     exit 1
 fi
@@ -56,22 +56,28 @@ applist="${appnames//,/ }"
 
 # Drop them off where we found them
 function popspace() {
-    cf target -o "$startorg" -s "$startspace" > /dev/null 2>&1 
+    cf target -o "$startorg" -s "$startspace" > /dev/null 2>&1
 }
 trap popspace exit
 
+apps_missing=0
+function appmissing() {
+    echo "ERROR: App $1 is not available!"
+    ((apps_missing+=1))
+}
+
 # Check that all apps are there, or error out
 for app in $applist ; do
-    cf app "$app" > /dev/null 2>&1 || echo "ERROR: App ${app} is not available!" && missing=1
+    cf app "$app" > /dev/null 2>&1 || appmissing "$app"
 done
-if [ -n "${appmissing}" ]; then
+if [ $apps_missing -gt 0 ]; then
     echo "Missing at least one specified app!"
     exit 1
 fi
 
 # Try to switch to the egress org+space, error out if it's not there
-cf target -o "$egressorg" -s "$egressspace"  > /dev/null 2>&1 || 
-    (echo "ERROR: Space ${egressorg}/${egressspace} is not available!" && popspace && exit 1)
+cf target -o "$egressorg" -s "$egressspace"  > /dev/null 2>&1 ||
+    (echo "ERROR: Space ${egressorg}/${egressspace} is not available!" && exit 1)
 popspace
 
 # If DRYRUN is set, don't run the commands, but echo them.
@@ -94,7 +100,7 @@ for app in $applist ; do
         AWS_FIPS_ENDPOINT=$( echo "$VCAP_SERVICES" | jq -r ".s3[$i].credentials.fips_endpoint")
 
         # Add both the FIPS and non-FIPS hostnames
-        buckethosts="$buckethosts ${BUCKET}.${AWS_ENDPOINT} ${BUCKET}.${AWS_FIPS_ENDPOINT}" 
+        buckethosts="$buckethosts ${BUCKET}.${AWS_ENDPOINT} ${BUCKET}.${AWS_FIPS_ENDPOINT}"
         ((i+=1))
     done
 
@@ -104,7 +110,7 @@ for app in $applist ; do
     # Assemble vars.yml file content
     proxyname="proxy-$(echo "$startorg" | tr _. - )-$(echo "$startspace" | tr _. -)-${app}"
     # A function to generate a random quote-safe password
-    randpw(){ < /dev/urandom tr -dc _A-Z-a-z-0-9 | head -c${1:-32};echo; }
+    randpw(){ < /dev/urandom base64 | tr -dc _A-Z-a-z-0-9 | head -c${1:-32};echo; }
 
     username="$(randpw)"
     password="$(randpw)"
@@ -139,5 +145,3 @@ $proxyallow
     $output cf restart "$app" --no-wait --strategy rolling
 
 done
-
-popspace
